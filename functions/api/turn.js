@@ -35,3 +35,8 @@ function json(body, status = 200) {
     headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   });
 }
+
+// GET /api/turn → quick setup check from a phone browser (never returns credentials).
+export async function onRequestGet({ env }) {
+  return json({ configured: Boolean(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN) });
+}

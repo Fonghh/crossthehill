@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#bcdbe8" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Cross the Hill</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M4 52 L24 22 L34 36 L42 26 L60 52Z' fill='%23e8873a'/%3E%3Ccircle cx='46' cy='14' r='6' fill='%23f2c14e'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <!-- Menus -->
+    <div id="menu" class="overlay">
+      <section id="screen-home" class="screen">
+        <h1 class="logo">Cross<span>the</span>Hill</h1>
+        <p class="sub">一起越野、互相拉一把</p>
+        <label class="field">暱稱<input id="name" maxlength="12" autocomplete="nickname" placeholder="你的名字" /></label>
+        <button id="btn-host" class="primary">開房（當主機）</button>
+        <div class="join-row">
+          <input id="room" maxlength="4" placeholder="房號" autocapitalize="characters" />
+          <button id="btn-join">加入</button>
+        </div>
+        <p class="hint">建議用電腦或較新的手機開房。語音請開 Discord / LINE，戴耳機效果更好。</p>
+        <p id="home-error" class="error"></p>
+      </section>
+
+      <section id="screen-car" class="screen hidden">
+        <h2>選擇你的車</h2>
+        <div id="car-cards" class="cards"></div>
+        <div id="colors" class="colors"></div>
+        <button id="btn-go" class="primary">出發！</button>
+        <button id="btn-car-back" class="ghost">返回</button>
+      </section>
+
+      <section id="screen-loading" class="screen hidden">
+        <div class="spinner"></div>
+        <p id="loading-text">正在生成地形…</p>
+      </section>
+    </div>
+
+    <!-- In-game HUD -->
+    <div id="hud" class="hidden">
+      <div id="top-left">
+        <button id="btn-menu" class="chip" aria-label="選單">☰</button>
+        <div id="room-chip" class="chip"></div>
+        <div id="tilt">
+          <div class="gauge" id="gauge-pitch"><svg viewBox="-30 -30 60 60"><g class="car"><rect x="-17" y="-5" width="34" height="9" rx="3"/><rect x="-9" y="-12" width="15" height="8" rx="3"/><circle cx="-10" cy="6" r="5"/><circle cx="11" cy="6" r="5"/></g></svg><span>0°</span></div>
+          <div class="gauge" id="gauge-roll"><svg viewBox="-30 -30 60 60"><g class="car"><rect x="-14" y="-6" width="28" height="10" rx="3"/><rect x="-10" y="-14" width="20" height="9" rx="3"/><rect x="-17" y="2" width="7" height="9" rx="2"/><rect x="10" y="2" width="7" height="9" rx="2"/></g></svg><span>0°</span></div>
+        </div>
+      </div>
+      <div id="mission" class="panel"></div>
+      <canvas id="compass" width="600" height="48"></canvas>
+      <div id="top-right">
+        <canvas id="minimap" width="300" height="300"></canvas>
+      </div>
+      <div id="toasts"></div>
+      <div id="speedo" class="panel"></div>
+
+      <div id="touch">
+        <div id="joy"><div id="joy-knob"></div></div>
+        <div id="pedals">
+          <button id="btn-cut" class="round small hidden" aria-label="斷開">✕</button>
+          <button id="btn-hook" class="round" aria-label="勾繩">🪝<small>勾繩</small></button>
+          <button id="btn-horn" class="round small" aria-label="喇叭">📯</button>
+          <button id="btn-reset" class="round small" aria-label="翻正">↻</button>
+          <button id="btn-brake" class="pedal" aria-label="煞車/倒車">煞車<small>倒車</small></button>
+          <button id="btn-gas" class="pedal gas" aria-label="油門">油門</button>
+        </div>
+      </div>
+      <p id="keys-help">W/S 油門煞車・A/D 轉向・按住 E＋滑鼠 勾繩（再按住收繩）・Q 斷開・R 翻正・H 喇叭・M 地圖</p>
+    </div>
+
+    <div id="bigmap" class="overlay hidden">
+      <canvas id="bigmap-canvas"></canvas>
+      <div class="bigmap-bar"><span>點地圖放標記（10 秒）・雙指縮放</span><button id="btn-map-close">關閉</button></div>
+    </div>
+
+    <div id="pause" class="overlay hidden">
+      <div class="panel menu-panel">
+        <h2>選單</h2>
+        <button id="btn-share">📋 複製邀請連結</button>
+        <button id="btn-respawn">🚩 回到上一個送達點</button>
+        <button id="btn-change-car">🚙 重新選車</button>
+        <div class="quality-row">畫質
+          <select id="quality"><option value="auto">自動</option><option value="0">低</option><option value="1">中</option><option value="2">高</option></select>
+        </div>
+        <button id="btn-leave" class="danger">離開房間</button>
+        <button id="btn-resume" class="primary">繼續</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -58,24 +58,33 @@ npm run dev
 
 調參只在主機端生效（物理由主機計算）。
 
-## 部署到 Cloudflare Pages
+## 部署到 Cloudflare
 
-1. Cloudflare 後台 → **Workers & Pages** → Create → **Pages** → Connect to Git → 選這個 repo
-2. Build 設定：
-   - Framework preset：None
-   - Build command：`npm run build`
-   - Build output directory：`dist`
-3. 部署完成後就能用 `https://<專案>.pages.dev` 玩
+專案同時支援 Cloudflare **Workers**（新版預設流程）和 **Pages**，二選一即可。Node 版本由 `.node-version` 指定，不用另外設定。
+
+### A. Workers（Cloudflare 新版「Import a repository」流程）
+
+1. Workers & Pages → Create application → **Import a repository** → 選 `crossthehill`
+2. Build command：`npm run build`
+3. Deploy command：`npx wrangler deploy`（預設值，不用改）
+4. Deploy。網址是 `https://crossthehill.<你的帳號>.workers.dev`
+5. TURN Secret 設在：該 Worker → Settings → Variables and Secrets
+
+設定檔：`wrangler.jsonc`（靜態檔來自 `dist/`，`/api/turn` 由 `worker/index.js` 處理）。
+
+### B. Pages
+
+1. Workers & Pages → Create → Pages → Connect to Git → 選 repo
+2. Framework preset：None；Build command：`npm run build`；Build output directory：`dist`
+3. TURN Secret 設在：Pages 專案 → Settings → Variables and Secrets
 
 ### 開啟 TURN（讓 4G / 5G 玩家也連得上）
 
-手機網路常常無法直接 P2P 連線，需要 TURN 中繼。`functions/api/turn.js` 是一個 Pages Function，會向 Cloudflare 申請短期憑證（API token 不會外流到瀏覽器）：
+1. Cloudflare 後台 → **Realtime** → **TURN Server** → 建立 TURN key，記下 **Key ID** 和 **API Token**
+2. 在上面 A 或 B 對應的位置新增兩個 Secret：`TURN_KEY_ID`、`TURN_KEY_API_TOKEN`
+3. 重新部署後，打開 `https://<你的網址>/api/turn`，看到 `{"configured":true}` 就完成了
 
-1. Cloudflare 後台 → **Realtime** → **TURN Server** → 建立一把 TURN key，記下 **Key ID** 和 **API Token**
-2. Pages 專案 → Settings → **Variables and Secrets** → 新增兩個 Secret：
-   - `TURN_KEY_ID`
-   - `TURN_KEY_API_TOKEN`
-3. 重新部署。之後遊戲會自動呼叫 `/api/turn`；沒設定時會退回只用 STUN（Wi-Fi 大多可連，部分 4G 會連不上）
+沒設定時遊戲會退回只用 STUN（Wi-Fi 大多可連，部分 4G 會連不上）。
 
 ## 架構速覽
 

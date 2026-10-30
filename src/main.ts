@@ -12,7 +12,7 @@ import { GameAudio } from './audio/audio';
 import { BigMap } from './ui/bigmap';
 import { Hud, buildMapImage } from './ui/hud';
 import { CarPicker, setLoading, showScreen } from './ui/menu';
-import { bindPinch, bindTouch } from './ui/touch';
+import { bindPinch, bindTouch, preventPageZoom } from './ui/touch';
 import { PhysicsWorld, RAPIER } from './world/physicsWorld';
 import { generateTerrain, type TerrainData } from './world/terrainGen';
 
@@ -20,6 +20,7 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const params = new URLSearchParams(location.search);
 const DEBUG = params.has('debug');
 if (params.has('touch')) document.body.classList.add('force-touch');
+preventPageZoom();
 
 const audio = new GameAudio();
 const picker = new CarPicker();

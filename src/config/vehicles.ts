@@ -52,6 +52,9 @@ export interface VehicleSpec {
   maxReverseKmh: number;
   brakeForce: number; // N total
   hillHold: number; // 0..1 auto brake when no input at low speed
+  holdSpeed: number; // m/s below which hill-hold engages (off both pedals)
+  engineBrake: number; // N total deceleration force when coasting (off both pedals)
+  throttleRise: number; // pedal travel per second while held (1 = full power after 1 s)
 
   // Steering
   maxSteer: number; // rad at standstill
@@ -119,6 +122,9 @@ export const VEHICLES: Record<VehicleId, VehicleSpec> = {
     maxReverseKmh: 22,
     brakeForce: 16000,
     hillHold: 1,
+    holdSpeed: 0.5,
+    engineBrake: 2400,
+    throttleRise: 1.4,
     maxSteer: 0.62,
     highSpeedSteer: 0.2,
     steerSpeed: 2.6,
@@ -170,6 +176,9 @@ export const VEHICLES: Record<VehicleId, VehicleSpec> = {
     maxReverseKmh: 18,
     brakeForce: 26000,
     hillHold: 1,
+    holdSpeed: 0.5,
+    engineBrake: 4200,
+    throttleRise: 1.1,
     maxSteer: 0.55,
     highSpeedSteer: 0.18,
     steerSpeed: 2.0,

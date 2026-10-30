@@ -12,7 +12,11 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #bcdbe8; color: var(--ink); overscroll-behavior: none; }
-body { touch-action: none; user-select: none; -webkit-user-select: none; }
+body { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+/* touch-action is not inherited: set it on every interactive layer so iOS can't page-zoom. */
+#hud, #hud *, canvas, #bigmap, #bigmap *, #pause, #pause * { touch-action: none; }
+.screen { touch-action: pan-y; }
+button, input, select, a, label, .card, .swatch { touch-action: manipulation; }
 canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 .hidden { display: none !important; }
 

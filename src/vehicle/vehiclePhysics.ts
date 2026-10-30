@@ -59,6 +59,9 @@ export class VehiclePhysics {
   speed = 0; // m/s along forward axis
   input: DriveInput = { steer: 0, throttle: 0, brake: 0 };
   submerged = 0; // metres the chassis centre is under water
+  /** Pedal positions after ramping: a held pedal builds up power instead of jumping to full. */
+  private gasPedal = 0;
+  private reversePedal = 0;
   private ball: RAPIER.Ball;
   private mounts: V3[];
   private prevLen: number[];
@@ -194,6 +197,11 @@ export class VehiclePhysics {
     if (wantsForward && this.speed > -0.6) this.reversing = false;
     if (!wantsBack && !wantsForward && this.speed > 0.3) this.reversing = false;
 
+    // Pedals ramp up while held and drop quickly when released.
+    const ramp = (cur: number, want: number) => want > cur ? Math.min(want, cur + s.throttleRise * dt) : Math.max(want, cur - 5 * dt);
+    this.gasPedal = ramp(this.gasPedal, this.reversing ? 0 : inp.throttle);
+    this.reversePedal = ramp(this.reversePedal, this.reversing ? inp.brake : 0);
+
     const wheelOmega = speedAbs / s.wheelRadius;
     const ratio = this.reversing ? s.reverseGear : s.gears[this.gear];
     this.rpm = clamp((wheelOmega * ratio * s.finalDrive * 60) / (2 * Math.PI), s.idleRpm, s.redlineRpm);
@@ -207,14 +215,17 @@ export class VehiclePhysics {
     let driveTotal = 0;
     let braking = false;
     if (this.reversing) {
-      if (wantsBack && -this.speed < s.maxReverseKmh / 3.6) driveTotal = -(torque * ratio * s.finalDrive * 0.85 / s.wheelRadius) * inp.brake;
+      if (wantsBack && -this.speed < s.maxReverseKmh / 3.6) driveTotal = -(torque * ratio * s.finalDrive * 0.85 / s.wheelRadius) * this.reversePedal;
       if (wantsForward) braking = true;
     } else {
-      if (wantsForward && this.speed < s.maxSpeedKmh / 3.6) driveTotal = (torque * ratio * s.finalDrive * 0.85 / s.wheelRadius) * inp.throttle;
+      if (wantsForward && this.speed < s.maxSpeedKmh / 3.6) driveTotal = (torque * ratio * s.finalDrive * 0.85 / s.wheelRadius) * this.gasPedal;
       if (this.rpm >= s.redlineRpm - 10 && this.gear === s.gears.length - 1) driveTotal *= 0.2;
       if (wantsBack) braking = true;
     }
-    const holding = !wantsForward && !wantsBack && speedAbs < 1.2;
+    // Off both pedals: engine braking slows the car gradually; only near standstill
+    // does the hill-hold lock it so it doesn't creep on slopes.
+    const coasting = !wantsForward && !wantsBack;
+    const holding = coasting && speedAbs < s.holdSpeed;
 
     // --- Per-wheel forces --------------------------------------------------------
     const mEff = grounded ? mass / grounded : mass;
@@ -283,6 +294,7 @@ export class VehiclePhysics {
       let Jf = (driveTotal / 4) * dt;
       if (braking) Jf = -Math.sign(vf) * Math.min(Math.abs(vf) * mEff, (s.brakeForce / 4) * dt * inp.brake + (s.brakeForce / 4) * dt * inp.throttle);
       else if (holding) Jf = -vf * mEff * s.hillHold;
+      else if (coasting) Jf = -Math.sign(vf) * Math.min(Math.abs(vf) * mEff, (s.engineBrake / 4) * dt);
       const rr = resist * s.rollingResistance * N * dt;
       Jf -= Math.sign(vf) * Math.min(Math.abs(vf) * mEff * 0.5, rr);
       const Jmag = Math.hypot(Jf, Js);

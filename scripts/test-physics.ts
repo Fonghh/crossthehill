@@ -40,6 +40,7 @@ function run(id: VehicleId) {
   for (let k = 0; k < 60 * 40; k++) {
     const p = car.body.translation();
     while (idx < road.length - 1 && Math.hypot(road[idx].x - p.x, road[idx].z - p.z) < 9) idx++;
+    if (idx >= road.length - 1) break; // end of road: don't U-turn at speed
     const tgt = road[idx];
     const fwd = rotate(car.body.rotation(), { x: 0, y: 0, z: 1 });
     const want = Math.atan2(tgt.x - p.x, tgt.z - p.z);
@@ -114,4 +115,31 @@ run('bigfoot');
     const p = sim.cars.get('a')!.body.translation();
     console.log(`[winch] self-recovery to ${c.label}: ${before.toFixed(1)}m -> ${Math.hypot(p.x - c.pos[0], p.z - c.pos[2]).toFixed(1)}m`);
   } else console.log('[winch] no static anchor nearby');
+}
+
+// 5. Pedal feel: throttle ramps in; releasing coasts down gradually (no sudden stop).
+{
+  const road = terrain.roads[0];
+  const s0 = road[20];
+  const yaw = Math.atan2(road[23].x - s0.x, road[23].z - s0.z);
+  for (const id of ['jeep', 'bigfoot'] as VehicleId[]) {
+    const car = new VehiclePhysics(phys, VEHICLES[id], id + '-pedal', { x: s0.x, y: heightAt(terrain, s0.x, s0.z) + 1.5, z: s0.z }, yaw);
+    for (let k = 0; k < 90; k++) { car.step(dt); phys.step(); }
+    const speeds: number[] = [];
+    for (let k = 0; k < 60 * 3; k++) {
+      car.input = { steer: 0, throttle: 1, brake: 0 };
+      car.step(dt); phys.step();
+      if (k % 30 === 29) speeds.push(car.speed * 3.6);
+    }
+    const coast: number[] = [];
+    let stopAt = -1;
+    for (let k = 0; k < 60 * 8; k++) {
+      car.input = { steer: 0, throttle: 0, brake: 0 };
+      car.step(dt); phys.step();
+      if (k % 60 === 59) coast.push(car.speed * 3.6);
+      if (stopAt < 0 && Math.abs(car.speed) < 0.3) stopAt = k / 60;
+    }
+    console.log(`[${id}] accel km/h every 0.5s: ${speeds.map((v) => v.toFixed(0)).join(' ')} | coast every 1s: ${coast.map((v) => v.toFixed(0)).join(' ')} | stopped after ${stopAt < 0 ? '>8' : stopAt.toFixed(1)}s`);
+    car.destroy();
+  }
 }

@@ -58,6 +58,16 @@ export function createTuningPanel(sim: HostSim, onToggleColliders: (on: boolean)
   rope.add(ROPE, 'stiffness', 10000, 300000, 1000).name('剛性');
   rope.add(ROPE, 'damping', 0, 40000, 500).name('阻尼');
 
+  const tp = gui.addFolder('傳送（測試用）');
+  tp.close();
+  sim.terrain.destinations.forEach((d, i) => {
+    tp.add({ go: () => sim.teleport('host', d.x + 16, d.z) }, 'go').name(`${i + 1}. ${d.name}`);
+  });
+  sim.terrain.creeks.forEach((c, i) => {
+    const p = c.pts[Math.floor(c.pts.length / 2)];
+    tp.add({ go: () => sim.teleport('host', p.x + 12, p.z) }, 'go').name(`溪流 ${i + 1}`);
+  });
+
   gui.add({
     copy: () => {
       const json = JSON.stringify({ vehicles: sim.specs, surfaces: SURFACES, rope: ROPE }, null, 2);

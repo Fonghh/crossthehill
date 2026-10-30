@@ -6,7 +6,7 @@ import { AnchorIndex, ROPE_RANGE, dist, toWorld, towPointToward, type AnchorCand
 import { HostSim } from './game/sim';
 import { Input } from './input/input';
 import { ClientNet, HostNet, normalizeRoomCode } from './net/net';
-import type { CarSnap, ClientMsg, GameEvent, HostMsg, PlayerInfo, Snapshot, Vec3T } from './net/protocol';
+import { packCar, unpackCar, type CarSnap, type ClientMsg, type GameEvent, type HostMsg, type PlayerInfo, type Snapshot, type Vec3T } from './net/protocol';
 import { GameRenderer, QUALITY } from './render/gameRenderer';
 import { GameAudio } from './audio/audio';
 import { BigMap } from './ui/bigmap';
@@ -137,6 +137,13 @@ class Game {
     window.addEventListener('resize', () => this.renderer.resize());
     this.renderer.resize();
     $('hud').classList.remove('hidden');
+    if (DEBUG) {
+      (window as unknown as { __info: () => object }).__info = () => ({
+        calls: this.renderer.renderer.info.render.calls,
+        triangles: this.renderer.renderer.info.render.triangles,
+        quality: this.renderer.qualityIndex,
+      });
+    }
     requestAnimationFrame(this.frame);
   }
 
@@ -164,6 +171,12 @@ class Game {
     if (DEBUG) {
       const { createTuningPanel } = await import('./debug/tuning');
       createTuningPanel(sim, (on) => { g.showColliders = on; });
+      const tp = params.get('tp');
+      if (tp) {
+        const [kind, n] = [tp[0], Number(tp.slice(1))];
+        const p = kind === 'c' ? terrain.creeks[n]?.pts[Math.floor(terrain.creeks[n].pts.length / 2)] : terrain.destinations[n];
+        if (p) sim.teleport('host', p.x + 12, p.z, Number(params.get('yaw') ?? 0));
+      }
     }
     if (net) g.hud.toast(`房號 ${net.code}，從選單複製邀請連結`, false, 5000);
     return g;
@@ -243,8 +256,7 @@ class Game {
   private onHostMsg(m: HostMsg) {
     switch (m.type) {
       case 'snap': {
-        const { type: _t, ...snap } = m;
-        void _t;
+        const snap: Snapshot = { t: m.t, cars: m.c.map(unpackCar), ropes: m.ropes, game: m.game };
         const sample = snap.t - performance.now();
         this.clockOffset = this.clockOffset === null ? sample : Math.max(sample, this.clockOffset * 0.98 + sample * 0.02);
         this.snaps.push(snap);
@@ -383,7 +395,8 @@ class Game {
       this.sendTimer += dt;
       if (this.hostNet && this.sendTimer >= 1 / GAME.snapshotHz) {
         this.sendTimer = 0;
-        this.hostNet.broadcast({ type: 'snap', ...this.view });
+        const v = this.view;
+        this.hostNet.broadcast({ type: 'snap', t: v.t, c: v.cars.map(packCar), ropes: v.ropes, game: v.game });
       }
       if (this.showColliders) this.drawColliders();
       else if (this.colliderLines) this.colliderLines.visible = false;

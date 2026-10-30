@@ -1,6 +1,6 @@
 // PeerJS (WebRTC) transport. The host's browser is the server; everyone else connects
 // to it in a star. Signalling defaults to the free PeerJS cloud; TURN credentials come
-// from our Cloudflare Worker when VITE_TURN_ENDPOINT is set.
+// from the Cloudflare Pages Function (functions/api/turn.js) when deployed there.
 
 import Peer, { type DataConnection, type PeerOptions } from 'peerjs';
 import { GAME } from '../config/game';
@@ -23,7 +23,8 @@ async function iceServers(): Promise<RTCIceServer[]> {
     { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:stun.l.google.com:19302' },
   ];
-  const endpoint = import.meta.env.VITE_TURN_ENDPOINT as string | undefined;
+  // Production default: the Cloudflare Pages Function in functions/api/turn.js.
+  const endpoint = (import.meta.env.VITE_TURN_ENDPOINT as string | undefined) ?? (import.meta.env.PROD ? './api/turn' : undefined);
   if (!endpoint) return fallback;
   try {
     const res = await fetch(endpoint, { method: 'POST' });

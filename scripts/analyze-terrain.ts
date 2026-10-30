@@ -90,11 +90,22 @@ for (const road of t.roads) {
   }
 }
 
+// Water consistency: every wet vertex above sea level must belong to a creek mesh.
+let phantom = 0;
+let creekWet = 0;
+for (let n = 0; n < t.verts * t.verts; n++) {
+  const wet = t.waterSurf[n] - t.heights[n] > 0.01;
+  if (!wet || t.heights[n] < 0) continue;
+  if (Number.isFinite(t.creekSurf[n])) creekWet++;
+  else phantom++;
+}
+
 const land = buckets.reduce((a, b) => a + b, 0);
 const pct = (n: number) => ((n / land) * 100).toFixed(1) + '%';
 console.log(`generated in ${genMs.toFixed(0)} ms`);
 console.log(`roads: ${t.roads.length} (${total * 2} m), creeks: ${t.creeks.length}, rocks: ${t.rocks.length}, trees: ${t.trees.length}, destinations: ${t.destinations.length}`);
 console.log(`slope on land  <20°: ${pct(buckets[0])}  20-28°: ${pct(buckets[1])}  28-35°: ${pct(buckets[2])}  35-42°: ${pct(buckets[3])}  >42°: ${pct(buckets[4])}`);
 console.log(`road worst grade: ${(worstGrade * 100).toFixed(1)}%  worst cross slope: ${(worstCross * 100).toFixed(1)}%  samples over limit: ${steepSamples}/${total}`);
+console.log(`water: ${creekWet} creek vertices wet, ${phantom} wet vertices without visible water (must be 0)`);
 console.log(`destinations: ${t.destinations.map((d) => `${d.name}@${d.y.toFixed(0)}m`).join(', ')}`);
 console.log(`wrote ${outPath}`);

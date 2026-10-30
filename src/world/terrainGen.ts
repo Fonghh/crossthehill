@@ -44,6 +44,7 @@ export interface TerrainData {
   matRock: Float32Array;
   matSand: Float32Array;
   waterSurf: Float32Array; // water surface height per vertex (sea = seaLevel)
+  creekSurf: Float32Array; // creek surface per vertex, NaN outside creeks
   roads: Vec2[][];
   creeks: Creek[];
   rocks: Rock[];
@@ -209,6 +210,7 @@ export function generateTerrain(seed = GAME.worldSeed): TerrainData {
   // ---- 4. Creeks ------------------------------------------------------------
   const creeks: Creek[] = [];
   const waterSurf = new Float32Array(V * V).fill(GAME.seaLevel);
+  const creekSurf = new Float32Array(V * V).fill(NaN); // creek water surface (render mesh source)
   const creekStarts = 4;
   for (let c = 0; c < creekStarts * 60 && creeks.length < creekStarts; c++) {
     const sx = (rnd() - 0.5) * size * 0.6;
@@ -220,7 +222,7 @@ export function generateTerrain(seed = GAME.worldSeed): TerrainData {
     if (tooClose) continue;
     const pts = traceCreek(sx, sz, sampleRaw, pads, rnd);
     if (pts.length < 30) continue;
-    const creek = carveCreek(pts, heights, waterSurf, roadDist, V, origin, cell);
+    const creek = carveCreek(pts, heights, waterSurf, creekSurf, roadDist, V, origin, cell);
     creeks.push(creek);
   }
 
@@ -363,7 +365,7 @@ export function generateTerrain(seed = GAME.worldSeed): TerrainData {
 
   return {
     size, cell, verts: V, origin, heights,
-    matRoad, matMud, matRock, matSand, waterSurf,
+    matRoad, matMud, matRock, matSand, waterSurf, creekSurf,
     roads, creeks, rocks, trees,
     spawn: { x: spawn.x, z: spawn.z, y: spawn.y, yaw: Math.atan2(destinations[0].x - spawn.x, destinations[0].z - spawn.z) },
     destinations,
@@ -707,7 +709,7 @@ function traceCreek(x: number, z: number, sample: (x: number, z: number) => numb
   return resample(pts, 2);
 }
 
-function carveCreek(pts: Vec2[], h: Float32Array, waterSurf: Float32Array, roadDist: Float32Array, V: number, origin: number, cell: number): Creek {
+function carveCreek(pts: Vec2[], h: Float32Array, waterSurf: Float32Array, creekSurf: Float32Array, roadDist: Float32Array, V: number, origin: number, cell: number): Creek {
   const sample = (x: number, z: number) => heightAtArray(h, V, origin, cell, x, z);
   let prof = pts.map((p) => sample(p.x, p.z));
   for (let pass = 0; pass < 2; pass++) {
@@ -747,21 +749,38 @@ function carveCreek(pts: Vec2[], h: Float32Array, waterSurf: Float32Array, roadD
       }
     }
   }
+  const crest = halfBed + 2.6;
   for (let n = 0; n < V * V; n++) {
     const k = bestK[n];
     if (k < 0) continue;
     const d = best[n];
     const b = bed[k];
-    const above = h[n] - b;
-    if (above <= 0) continue;
-    const bank = clamp(above * 4.5, 5.5, 16);
-    const w = smoothstep(halfBed, halfBed + bank, d);
-    let carved = lerp(b, h[n], w);
-    // Where a road crosses, keep it a shallow ford instead of a ditch.
-    const nearRoad = 1 - smoothstep(6, 20, roadDist[n]);
-    if (nearRoad > 0) carved = Math.max(carved, h[n] - lerp(1.05, 0.7, nearRoad) * (1 - w));
-    if (carved < h[n]) h[n] = carved;
-    if (d < halfBed + bank) waterSurf[n] = Math.max(waterSurf[n], surf[k]);
+    const sf = surf[k];
+    let target = h[n];
+    if (h[n] > b) {
+      const bank = clamp((h[n] - b) * 4.5, 5.5, 16);
+      const w = smoothstep(halfBed, halfBed + bank, d);
+      let carved = lerp(b, h[n], w);
+      // Where a road crosses, keep it a shallow ford instead of a ditch.
+      const nearRoad = 1 - smoothstep(6, 20, roadDist[n]);
+      if (nearRoad > 0) carved = Math.max(carved, h[n] - lerp(1.05, 0.7, nearRoad) * (1 - w));
+      target = Math.min(h[n], carved);
+    } else if (d < halfBed) {
+      target = b;
+    }
+    // Levee: channel walls always rise above the water line, so water can never
+    // spill onto a downhill slope (visually or physically).
+    if (d > halfBed) {
+      const levee = d < crest
+        ? lerp(b, sf + 0.2, smoothstep(halfBed, crest, d))
+        : sf + 0.2 - (d - crest) * 0.3;
+      target = Math.max(target, levee);
+    }
+    h[n] = target;
+    if (d <= crest) {
+      waterSurf[n] = Math.max(waterSurf[n], sf);
+      creekSurf[n] = Number.isFinite(creekSurf[n]) ? Math.max(creekSurf[n], sf) : sf;
+    }
   }
   return { pts, surf, halfWidth: halfBed + 1.6 };
 }

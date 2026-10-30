@@ -78,7 +78,33 @@ export type ClientMsg =
 export type HostMsg =
   | { type: 'welcome'; you: string; seed: number }
   | { type: 'players'; players: PlayerInfo[] }
-  | ({ type: 'snap' } & Snapshot)
+  | { type: 'snap'; t: number; c: PackedCar[]; ropes: RopeSnap[]; game: GameSnap }
   | { type: 'event'; ev: GameEvent }
   | { type: 'reject'; reason: string }
   | { type: 'pong'; t: number; host: number };
+
+// Snapshots go out 20×/s to every client, so cars are packed as flat arrays (no keys).
+export type PackedCar = (number | string)[];
+const SURF = ['grass', 'road', 'rock', 'sand', 'mud', 'water', 'car', 'air'];
+
+export function packCar(c: CarSnap): PackedCar {
+  return [c.id, ...c.p, ...c.q, ...c.v, c.st, ...c.wl, ...c.ws, c.rpm, c.gear, c.slip, Math.max(0, SURF.indexOf(c.surf)), c.sub];
+}
+
+export function unpackCar(a: PackedCar): CarSnap {
+  const n = (i: number) => a[i] as number;
+  return {
+    id: a[0] as string,
+    p: [n(1), n(2), n(3)],
+    q: [n(4), n(5), n(6), n(7)],
+    v: [n(8), n(9), n(10)],
+    st: n(11),
+    wl: [n(12), n(13), n(14), n(15)],
+    ws: [n(16), n(17), n(18), n(19)],
+    rpm: n(20),
+    gear: n(21),
+    slip: n(22),
+    surf: SURF[n(23)] ?? 'grass',
+    sub: n(24),
+  };
+}

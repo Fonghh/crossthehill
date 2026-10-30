@@ -63,9 +63,25 @@ export class HostSim {
     return { x, z, yaw: Math.atan2(d.x - x, d.z - z) };
   }
 
+  /** Late joiners appear next to the host (behind and to the side), not back at the pad. */
+  private joinPoint(slot: number) {
+    const host = this.cars.get('host');
+    if (!host || slot === 0) return this.spawnPoint(slot);
+    const p = host.body.translation();
+    const f = rotate(host.body.rotation(), { x: 0, y: 0, z: 1 });
+    const yaw = Math.atan2(f.x, f.z);
+    const side = slot % 2 ? 1 : -1;
+    const back = 7 + Math.floor((slot - 1) / 2) * 6;
+    return {
+      x: p.x - Math.sin(yaw) * back + Math.cos(yaw) * side * 4,
+      z: p.z - Math.cos(yaw) * back - Math.sin(yaw) * side * 4,
+      yaw,
+    };
+  }
+
   addPlayer(info: PlayerInfo) {
     const slot = this.freeSlot();
-    const sp = this.spawnPoint(slot);
+    const sp = this.joinPoint(slot);
     const car = new VehiclePhysics(this.phys, this.specs[info.car], info.id, { x: sp.x, y: 0, z: sp.z }, sp.yaw);
     car.teleport({ x: sp.x, y: car.groundHeight(sp.x, sp.z) + 1.4, z: sp.z }, sp.yaw);
     this.players.set(info.id, { info, car, winch: false, lastReset: -99, drownT: 0, slot });
@@ -257,6 +273,14 @@ export class HostSim {
         markers: [...this.markers.values()],
       },
     };
+  }
+
+  /** Debug: drop a player's car at (x, z). */
+  teleport(id: string, x: number, z: number, yaw = 0) {
+    const car = this.cars.get(id);
+    if (!car) return;
+    this.dropRopesInvolving(id);
+    car.teleport({ x, y: car.groundHeight(x, z) + 1.5, z }, yaw);
   }
 
   /** Debug panel: push edited spec to every car of that type. */

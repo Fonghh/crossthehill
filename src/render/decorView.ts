@@ -64,7 +64,13 @@ export class DecorView {
   }
 
   private buildTrees() {
-    const trees = this.t.trees;
+    // Instanced per 256 m region so off-screen forests are culled.
+    const regions = new Map<string, number[]>();
+    this.t.trees.forEach((tr, i) => {
+      const key = `${Math.floor(tr.x / 256)},${Math.floor(tr.z / 256)}`;
+      if (!regions.has(key)) regions.set(key, []);
+      regions.get(key)!.push(i);
+    });
     const trunkGeo = new THREE.CylinderGeometry(0.75, 1, 1, 6);
     trunkGeo.translate(0, 0.5, 0);
     const roundGeo = new THREE.IcosahedronGeometry(1, 1);
@@ -73,53 +79,54 @@ export class DecorView {
       new THREE.ConeGeometry(0.78, 1.2, 7).translate(0, 1.35, 0),
       new THREE.ConeGeometry(0.52, 0.95, 7).translate(0, 1.95, 0),
     ])!;
-    const lam = (o: THREE.MeshLambertMaterialParameters) => new THREE.MeshLambertMaterial({ flatShading: true, ...o });
-    const trunks = new THREE.InstancedMesh(trunkGeo, lam({}), trees.length);
-    const rounds = new THREE.InstancedMesh(roundGeo, lam({}), trees.length);
-    const cones = new THREE.InstancedMesh(coneGeo, lam({}), trees.length);
-    let nr = 0;
-    let nc = 0;
+    const mat = new THREE.MeshLambertMaterial({ flatShading: true });
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const s = new THREE.Vector3();
     const p = new THREE.Vector3();
     const col = new THREE.Color();
+    const up = new THREE.Vector3(0, 1, 0);
     const rnd = mulberry32(99);
-    trees.forEach((tr, i) => {
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), tr.rot);
-      const trunkTop = tr.trunkH;
-      p.set(tr.x, tr.y - 0.4, tr.z);
-      s.set(tr.trunkR, trunkTop + 0.4, tr.trunkR);
-      m.compose(p, q, s);
-      trunks.setMatrixAt(i, m);
-      trunks.setColorAt(i, col.set(tr.kind === 4 ? '#ece6d8' : '#6b4a35'));
-      const palette = CANOPY_COLORS[tr.kind];
-      col.set(palette[Math.floor(rnd() * palette.length)]);
-      if (tr.kind === 3) {
-        p.set(tr.x, tr.y + trunkTop * 0.45, tr.z);
-        const w = 1.5 * tr.scale;
-        s.set(w, 2.4 * tr.scale, w);
-        m.compose(p, q, s);
-        cones.setMatrixAt(nc, m);
-        cones.setColorAt(nc++, col);
-      } else {
-        const r = (tr.kind === 4 ? 1.2 : 1.7) * tr.scale;
-        p.set(tr.x, tr.y + trunkTop + r * 0.55, tr.z);
-        s.set(r, r * (0.85 + rnd() * 0.3), r);
-        m.compose(p, q, s);
-        rounds.setMatrixAt(nr, m);
-        rounds.setColorAt(nr++, col);
+    for (const list of regions.values()) {
+      const trunks = new THREE.InstancedMesh(trunkGeo, mat, list.length);
+      const rounds = new THREE.InstancedMesh(roundGeo, mat, list.length);
+      const cones = new THREE.InstancedMesh(coneGeo, mat, list.length);
+      let nr = 0;
+      let nc = 0;
+      list.forEach((ti, k) => {
+        const tr = this.t.trees[ti];
+        q.setFromAxisAngle(up, tr.rot);
+        p.set(tr.x, tr.y - 0.4, tr.z);
+        s.set(tr.trunkR, tr.trunkH + 0.4, tr.trunkR);
+        trunks.setMatrixAt(k, m.compose(p, q, s));
+        trunks.setColorAt(k, col.set(tr.kind === 4 ? '#ece6d8' : '#6b4a35'));
+        const palette = CANOPY_COLORS[tr.kind];
+        col.set(palette[Math.floor(rnd() * palette.length)]);
+        if (tr.kind === 3) {
+          p.set(tr.x, tr.y + tr.trunkH * 0.45, tr.z);
+          const w = 1.5 * tr.scale;
+          s.set(w, 2.4 * tr.scale, w);
+          cones.setMatrixAt(nc, m.compose(p, q, s));
+          cones.setColorAt(nc++, col);
+        } else {
+          const r = (tr.kind === 4 ? 1.2 : 1.7) * tr.scale;
+          p.set(tr.x, tr.y + tr.trunkH + r * 0.55, tr.z);
+          s.set(r, r * (0.85 + rnd() * 0.3), r);
+          rounds.setMatrixAt(nr, m.compose(p, q, s));
+          rounds.setColorAt(nr++, col);
+        }
+      });
+      rounds.count = nr;
+      cones.count = nc;
+      for (const im of [trunks, rounds, cones]) {
+        if (!im.count) continue;
+        im.castShadow = true;
+        im.receiveShadow = true;
+        im.instanceMatrix.needsUpdate = true;
+        if (im.instanceColor) im.instanceColor.needsUpdate = true;
+        im.computeBoundingSphere();
+        this.group.add(im);
       }
-    });
-    rounds.count = nr;
-    cones.count = nc;
-    for (const im of [trunks, rounds, cones]) {
-      im.castShadow = true;
-      im.receiveShadow = true;
-      im.instanceMatrix.needsUpdate = true;
-      if (im.instanceColor) im.instanceColor.needsUpdate = true;
-      im.computeBoundingSphere();
-      this.group.add(im);
     }
   }
 
@@ -129,25 +136,34 @@ export class DecorView {
     sea.rotation.x = -Math.PI / 2;
     sea.position.y = 0;
     this.group.add(sea);
-    for (const c of this.t.creeks) {
-      const pos: number[] = [];
-      const idx: number[] = [];
-      for (let k = 0; k < c.pts.length; k++) {
-        const a = c.pts[Math.max(0, k - 1)];
-        const b = c.pts[Math.min(c.pts.length - 1, k + 1)];
-        const dx = b.x - a.x;
-        const dz = b.z - a.z;
-        const l = Math.hypot(dx, dz) || 1;
-        const nx = -dz / l;
-        const nz = dx / l;
-        const w = c.halfWidth + 2.5;
-        const y = c.surf[k];
-        pos.push(c.pts[k].x + nx * w, y, c.pts[k].z + nz * w, c.pts[k].x - nx * w, y, c.pts[k].z - nz * w);
-        if (k > 0) {
-          const o = (k - 1) * 2;
-          idx.push(o, o + 2, o + 1, o + 1, o + 2, o + 3);
-        }
+    // Creek water is built from the terrain grid itself: a cell gets water only where the
+    // generator recorded a creek surface at all four corners — the same data physics uses.
+    const t = this.t;
+    const V = t.verts;
+    const pos: number[] = [];
+    const idx: number[] = [];
+    const vid = new Int32Array(V * V).fill(-1);
+    const vert = (i: number, j: number) => {
+      const n = j * V + i;
+      if (vid[n] < 0) {
+        vid[n] = pos.length / 3;
+        pos.push(t.origin + i * t.cell, t.creekSurf[n], t.origin + j * t.cell);
       }
+      return vid[n];
+    };
+    for (let j = 0; j < V - 1; j++) {
+      for (let i = 0; i < V - 1; i++) {
+        const a = j * V + i;
+        const cs = t.creekSurf;
+        if (!(Number.isFinite(cs[a]) && Number.isFinite(cs[a + 1]) && Number.isFinite(cs[a + V]) && Number.isFinite(cs[a + V + 1]))) continue;
+        // Skip cells that are dry everywhere (water fully under the levee).
+        const hs = t.heights;
+        if (hs[a] >= cs[a] && hs[a + 1] >= cs[a + 1] && hs[a + V] >= cs[a + V] && hs[a + V + 1] >= cs[a + V + 1]) continue;
+        const va = vert(i, j), vb = vert(i + 1, j), vc = vert(i, j + 1), vd = vert(i + 1, j + 1);
+        idx.push(va, vc, vb, vb, vc, vd);
+      }
+    }
+    if (idx.length) {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
       g.setIndex(idx);

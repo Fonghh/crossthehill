@@ -1,0 +1,10 @@
+// Cloudflare Workers deploy: build with `npm run build`, deploy with `npx wrangler deploy`.
+{
+  "name": "crossthehill",
+  "main": "worker/index.js",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS"
+  }
+}

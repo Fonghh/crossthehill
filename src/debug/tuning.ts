@@ -42,6 +42,7 @@ export function createTuningPanel(sim: HostSim, onToggleColliders: (on: boolean)
     eng.add(s, 'holdSpeed', 0, 3, 0.1).name('駐坡啟動速度 m/s').onChange(apply);
     eng.add(s, 'engineBrake', 0, 15000, 100).name('放油門減速力 N').onChange(apply);
     eng.add(s, 'throttleRise', 0.3, 10, 0.1).name('油門加深速度').onChange(apply);
+    eng.add(s, 'brakeRise', 0.3, 10, 0.1).name('煞車加深速度').onChange(apply);
     const st = f.addFolder('轉向／絞盤');
     st.add(s, 'maxSteer', 0.2, 0.9, 0.01).name('最大轉角').onChange(apply);
     st.add(s, 'highSpeedSteer', 0.05, 0.6, 0.01).name('高速轉角').onChange(apply);

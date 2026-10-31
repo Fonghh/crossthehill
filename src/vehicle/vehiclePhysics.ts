@@ -62,6 +62,7 @@ export class VehiclePhysics {
   /** Pedal positions after ramping: a held pedal builds up power instead of jumping to full. */
   private gasPedal = 0;
   private reversePedal = 0;
+  private brakePedal = 0;
   private ball: RAPIER.Ball;
   private mounts: V3[];
   private prevLen: number[];
@@ -198,9 +199,12 @@ export class VehiclePhysics {
     if (!wantsBack && !wantsForward && this.speed > 0.3) this.reversing = false;
 
     // Pedals ramp up while held and drop quickly when released.
-    const ramp = (cur: number, want: number) => want > cur ? Math.min(want, cur + s.throttleRise * dt) : Math.max(want, cur - 5 * dt);
-    this.gasPedal = ramp(this.gasPedal, this.reversing ? 0 : inp.throttle);
-    this.reversePedal = ramp(this.reversePedal, this.reversing ? inp.brake : 0);
+    // Releasing any pedal lets go almost at once (fully off within ~0.1 s).
+    const ramp = (cur: number, want: number, rise: number) => want > cur ? Math.min(want, cur + rise * dt) : Math.max(want, cur - 10 * dt);
+    this.gasPedal = ramp(this.gasPedal, this.reversing ? 0 : inp.throttle, s.throttleRise);
+    this.reversePedal = ramp(this.reversePedal, this.reversing ? inp.brake : 0, s.throttleRise);
+    // Brake pedal: whichever pedal opposes the current direction of travel.
+    this.brakePedal = ramp(this.brakePedal, this.reversing ? inp.throttle : inp.brake, s.brakeRise);
 
     const wheelOmega = speedAbs / s.wheelRadius;
     const ratio = this.reversing ? s.reverseGear : s.gears[this.gear];
@@ -292,7 +296,7 @@ export class VehiclePhysics {
 
       let Js = -vs * mEff * s.lateralStiffness;
       let Jf = (driveTotal / 4) * dt;
-      if (braking) Jf = -Math.sign(vf) * Math.min(Math.abs(vf) * mEff, (s.brakeForce / 4) * dt * inp.brake + (s.brakeForce / 4) * dt * inp.throttle);
+      if (braking) Jf = -Math.sign(vf) * Math.min(Math.abs(vf) * mEff, (s.brakeForce / 4) * dt * this.brakePedal);
       else if (holding) Jf = -vf * mEff * s.hillHold;
       else if (coasting) Jf = -Math.sign(vf) * Math.min(Math.abs(vf) * mEff, (s.engineBrake / 4) * dt);
       const rr = resist * s.rollingResistance * N * dt;

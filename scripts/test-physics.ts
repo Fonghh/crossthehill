@@ -143,3 +143,26 @@ run('bigfoot');
     car.destroy();
   }
 }
+
+// 6. Brake / reverse release: letting go must stop braking or reversing right away.
+{
+  const road = terrain.roads[0];
+  const s0 = road[20];
+  const yaw = Math.atan2(road[23].x - s0.x, road[23].z - s0.z);
+  const car = new VehiclePhysics(phys, VEHICLES.jeep, 'brake-test', { x: s0.x, y: heightAt(terrain, s0.x, s0.z) + 1.5, z: s0.z }, yaw);
+  const run = (input: { throttle: number; brake: number }, sec: number) => {
+    for (let k = 0; k < sec * 60; k++) { car.input = { steer: 0, ...input }; car.step(dt); phys.step(); }
+    return car.speed * 3.6;
+  };
+  run({ throttle: 0, brake: 0 }, 1.5);
+  const v0 = run({ throttle: 1, brake: 0 }, 2.5);
+  const vBrake = run({ throttle: 0, brake: 1 }, 0.4);
+  const vAfter = run({ throttle: 0, brake: 0 }, 1);
+  console.log(`[brake] ${v0.toFixed(0)} km/h → brake 0.4s ${vBrake.toFixed(0)} → released 1s ${vAfter.toFixed(0)} km/h (should keep rolling)`);
+  run({ throttle: 0, brake: 0 }, 6);
+  const vRev = run({ throttle: 0, brake: 1 }, 2.5);
+  const vRevAfter = run({ throttle: 0, brake: 0 }, 0.5);
+  const vRevStop = run({ throttle: 0, brake: 0 }, 3);
+  console.log(`[reverse] hold 2.5s ${vRev.toFixed(1)} km/h → released 0.5s ${vRevAfter.toFixed(1)} → 3s later ${vRevStop.toFixed(1)} km/h`);
+  car.destroy();
+}

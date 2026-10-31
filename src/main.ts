@@ -5,7 +5,8 @@ import type { VehicleId } from './config/vehicles';
 import { AnchorIndex, ROPE_RANGE, dist, toWorld, towPointToward, type AnchorCandidate } from './game/anchors';
 import { HostSim } from './game/sim';
 import { Input } from './input/input';
-import { ClientNet, HostNet, normalizeRoomCode } from './net/net';
+import { ClientNet, HostNet, normalizeRoomCode, roomPeerId } from './net/net';
+import type Peer from 'peerjs';
 import { packCar, unpackCar, type CarSnap, type ClientMsg, type GameEvent, type HostMsg, type PlayerInfo, type Snapshot, type Vec3T } from './net/protocol';
 import { GameRenderer, QUALITY } from './render/gameRenderer';
 import { GameAudio } from './audio/audio';
@@ -202,16 +203,159 @@ class Game {
     const terrain = generateTerrain(welcome.seed);
     const g = new Game(terrain, welcome.you, null, null, net);
     g.roomCode = code;
-    net.onMessage = (m) => g.onHostMsg(m);
+    g.attachClient(net);
     for (const m of early) g.onHostMsg(m);
-    net.onClose = () => {
-      g.hud.toast('主機已離開，房間結束', true, 4000);
-      setTimeout(() => location.assign(location.pathname), 3000);
-    };
     return g;
   }
 
   roomCode: string | null = null;
+  private migrating = false;
+  private guarding = false;
+  private lastSnapAt = 0;
+
+  private attachClient(net: ClientNet) {
+    this.clientNet = net;
+    net.onMessage = (m) => this.onHostMsg(m);
+    net.onClose = () => void this.onHostLost();
+  }
+
+  // ----------------------------------------------------------------------------
+  // Host migration (client side). Order of attempts:
+  //   1. the old host again (maybe only *we* blipped)
+  //   2. the remaining players in join order; when it's our turn, we become host
+  // Each other candidate gets a few seconds to rebuild the world and open its peer.
+
+  private async onHostLost() {
+    if (this.migrating || !this.roomCode) return;
+    this.migrating = true;
+    const code = this.roomCode;
+    const snap = this.snaps[this.snaps.length - 1] ?? this.view;
+    const players = this.players.slice();
+    const oldHost = players.find((p) => p.host)?.id ?? 'host';
+    const successors = players.filter((p) => !p.host && !p.away).map((p) => p.id);
+    this.hud.toast('主機連線中斷，正在重新連線…', false, 4000);
+
+    // Keep cycling for a while: if it's *our* network that dropped, attempts fail until
+    // it comes back, and then the first attempt (the old host) succeeds.
+    const startedAt = performance.now();
+    const giveUpAt = startedAt + 75_000 + successors.length * GAME.migrationRetrySeconds * 1000;
+    let peer = this.clientNet?.peer;
+    while (performance.now() < giveUpAt) {
+      if (!peer || peer.destroyed || peer.disconnected) {
+        try {
+          peer?.destroy();
+          peer = await ClientNet.openPeer();
+        } catch {
+          peer = undefined;
+          await new Promise((r) => setTimeout(r, 2000));
+          continue; // still offline
+        }
+      }
+      const result = await this.migrationRound(peer, code, snap, players, oldHost, successors, startedAt);
+      if (result) {
+        if (result === 'hosting') peer.destroy();
+        this.migrating = false;
+        return;
+      }
+    }
+    this.migrating = false;
+    this.hud.toast('無法重新連線，請重新加入房間', true, 4000);
+    setTimeout(() => location.assign(`${location.pathname}?room=${code}`), 3500);
+  }
+
+  /**
+   * One pass: first look for anyone already hosting (old host, room id, or any player's
+   * takeover id). If nobody answers, take over only when it's our turn — the first in
+   * join order goes at once, the k-th after k × migrationRetrySeconds of nobody showing up.
+   */
+  private async migrationRound(peer: Peer, code: string, snap: Snapshot | null, players: PlayerInfo[], oldHost: string, successors: string[], startedAt: number): Promise<'client' | 'hosting' | null> {
+    const ids = [...new Set([
+      roomPeerId(code, oldHost),
+      roomPeerId(code),
+      ...players.filter((p) => p.id !== this.selfId).map((p) => roomPeerId(code, p.id)),
+    ])];
+    try {
+      this.rejoin(await ClientNet.connect(peer, ids, 1500));
+      return 'client';
+    } catch { /* nobody is hosting yet */ }
+    const rank = successors.indexOf(this.selfId);
+    const waited = performance.now() - startedAt;
+    if (rank >= 0 && waited >= rank * GAME.migrationRetrySeconds * 1000 && snap) {
+      console.info('[migrate] taking over as host, rank', rank);
+      if (await this.promoteToHost(code, snap, players, successors.slice(0, rank))) return 'hosting';
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+    return null;
+  }
+
+  /**
+   * After taking over, keep checking for a host that outranks us (someone earlier in the
+   * join order who also took over). If one shows up, hand over to it and become a client,
+   * so a race never leaves the group split across two rooms.
+   */
+  private async guardTakeover(code: string, ahead: string[]) {
+    if (!ahead.length || this.guarding) return;
+    this.guarding = true;
+    let probe: Peer | undefined;
+    for (let i = 0; i < 25 && this.sim; i++) {
+      await new Promise((r) => setTimeout(r, 4000));
+      try {
+        if (!probe || probe.destroyed) probe = await ClientNet.openPeer();
+        const net = await ClientNet.connect(probe, ahead.map((id) => roomPeerId(code, id)), 1500);
+        console.info('[migrate] found a senior host, handing over');
+        this.hud.toast('發現另一位主機，合併回同一個房間', false, 3000);
+        this.hostNet?.destroy();
+        this.hostNet = null;
+        this.sim = null;
+        this.guarding = false;
+        this.rejoin(net);
+        return;
+      } catch { /* still the only host */ }
+    }
+    this.guarding = false;
+    probe?.destroy();
+  }
+
+  /** Connected to a (possibly new) host: reclaim our car with prevId. */
+  private rejoin(net: ClientNet) {
+    console.info('[migrate] connected to', net.hostPeerId);
+    this.lastSnapAt = performance.now();
+    this.snaps = [];
+    this.clockOffset = null; // new host, new clock
+    this.attachClient(net);
+    const me = this.players.find((p) => p.id === this.selfId);
+    net.send({ type: 'hello', name: me?.name ?? playerName(), car: me?.car ?? picker.car, color: me?.color ?? picker.color, prevId: this.selfId });
+    this.migrating = false;
+    this.hud.toast('已重新連上', false, 2000);
+  }
+
+  /** Our turn: rebuild the simulation from the last snapshot and start hosting. */
+  private async promoteToHost(code: string, snap: Snapshot, players: PlayerInfo[], ahead: string[]): Promise<boolean> {
+    this.hud.toast('主機斷線，由你接手主機…', true, 3000);
+    await nextFrame();
+    try {
+      await PhysicsWorld.init();
+      const sim = HostSim.restore(this.terrain, this.selfId, snap, players);
+      const firstFree = 1 + players.reduce((m, p) => Math.max(m, Number(p.id.slice(1)) || 0), players.length);
+      const net = await HostNet.takeOver(code, this.selfId, firstFree);
+      this.clientNet?.destroy();
+      this.clientNet = null;
+      this.sim = sim;
+      this.hostNet = net;
+      this.anchors = sim.anchors;
+      this.snaps = [];
+      this.clockOffset = null;
+      this.acc = 0;
+      this.wireHost(net);
+      this.playersChanged();
+      this.hud.toast('你現在是主機，大家會自動連回來', false, 3500);
+      void this.guardTakeover(code, ahead);
+      return true;
+    } catch (e) {
+      console.warn('takeover failed', e);
+      return false;
+    }
+  }
 
   private wireHost(net: HostNet) {
     this.roomCode = net.code;
@@ -219,12 +363,22 @@ class Game {
     net.onMessage = (id, msg) => {
       if (msg.type === 'hello') {
         if (sim.players.has(id)) return;
+        const name = String(msg.name ?? '').slice(0, 12) || '駕駛';
+        // Returning player (dropped connection, or reconnecting after a host change).
+        // The old link may not have timed out yet; rename() closes it.
+        if (msg.prevId && msg.prevId !== this.selfId && sim.players.has(msg.prevId)) {
+          net.rename(id, msg.prevId);
+          sim.setBack(msg.prevId, name);
+          net.send(msg.prevId, { type: 'welcome', you: msg.prevId, seed: GAME.worldSeed });
+          this.playersChanged();
+          this.pushEvent({ kind: 'toast', text: `${name} 回來了` });
+          return;
+        }
         if (sim.players.size >= GAME.maxPlayers) {
           net.send(id, { type: 'reject', reason: 'full' });
           setTimeout(() => net.kick(id), 500);
           return;
         }
-        const name = String(msg.name ?? '').slice(0, 12) || '駕駛';
         sim.addPlayer({ id, name, car: msg.car === 'bigfoot' ? 'bigfoot' : 'jeep', color: String(msg.color).slice(0, 9) });
         net.send(id, { type: 'welcome', you: id, seed: GAME.worldSeed });
         this.playersChanged();
@@ -237,9 +391,15 @@ class Game {
     };
     net.onLeave = (id) => {
       const name = sim.players.get(id)?.info.name;
-      sim.removePlayer(id);
+      sim.setAway(id);
       this.playersChanged();
-      if (name) this.pushEvent({ kind: 'toast', text: `${name} 離開了` });
+      if (name) this.pushEvent({ kind: 'toast', text: `${name} 斷線了，車子保留 ${GAME.awayKeepSeconds} 秒` });
+      // Lost everyone? Maybe it was *our* network: the others will have elected a new
+      // host, so look for it and rejoin as a client (same logic as a takeover guard).
+      if (net.count === 0 && this.roomCode) {
+        const others = this.players.filter((p) => p.id !== this.selfId).map((p) => p.id);
+        void this.guardTakeover(this.roomCode, others);
+      }
     };
   }
 
@@ -257,6 +417,7 @@ class Game {
   private onHostMsg(m: HostMsg) {
     switch (m.type) {
       case 'snap': {
+        this.lastSnapAt = performance.now();
         const snap: Snapshot = { t: m.t, cars: m.c.map(unpackCar), ropes: m.ropes, game: m.game };
         const sample = snap.t - performance.now();
         this.clockOffset = this.clockOffset === null ? sample : Math.max(sample, this.clockOffset * 0.98 + sample * 0.02);
@@ -264,6 +425,15 @@ class Game {
         if (this.snaps.length > 30) this.snaps.shift();
         break;
       }
+      case 'welcome':
+        if (m.you !== this.selfId) {
+          this.selfId = m.you;
+          this.hud.toast('原本的車已移除，已幫你在隊友旁邊重新出發');
+        }
+        break;
+      case 'reject':
+        this.hud.toast(m.reason === 'full' ? '房間已滿' : `被拒絕：${m.reason}`, true);
+        break;
       case 'players':
         this.players = m.players;
         this.renderer.syncPlayers(m.players);
@@ -336,7 +506,9 @@ class Game {
     $('btn-respawn').addEventListener('click', () => { this.send({ type: 'respawn' }); this.togglePause(false); });
     $('btn-change-car').addEventListener('click', () => { this.togglePause(false); showScreen('car'); picker.refresh(); });
     $('btn-leave').addEventListener('click', () => {
-      if (this.sim && this.players.length > 1 && !confirm('你是主機，離開會結束整個房間。確定？')) return;
+      // Leaving no longer ends the room: the others elect a new host.
+      this.hostNet?.destroy();
+      this.clientNet?.destroy();
       location.assign(location.pathname);
     });
     $('btn-share').addEventListener('click', async () => {
@@ -388,6 +560,7 @@ class Game {
       let steps = 0;
       while (this.acc >= h && steps < 4) { this.sim.step(h); this.acc -= h; steps++; }
       if (steps === 4) this.acc = 0;
+      if (this.sim.removed.length) { this.sim.removed.length = 0; this.playersChanged(); }
       this.view = this.sim.snapshot();
       for (const ev of this.sim.events.splice(0)) {
         this.handleEvent(ev);
@@ -404,6 +577,11 @@ class Game {
     } else {
       this.sendTimer += dt;
       if (this.sendTimer >= 1 / GAME.inputHz) { this.sendTimer = 0; this.clientNet?.send(input); }
+      // The host streams 20 snapshots/s; 3 s of silence means it's gone (WebRTC is slow to say so).
+      if (!this.migrating && this.clientNet && this.lastSnapAt && now - this.lastSnapAt > 3000) {
+        this.clientNet.detach();
+        void this.onHostLost();
+      }
       this.view = this.interpolated(now);
     }
 

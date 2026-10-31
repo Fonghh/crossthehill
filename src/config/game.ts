@@ -15,6 +15,7 @@ export const GAME = {
   snapshotHz: 20,
   inputHz: 30,
   interpDelayMs: 110,
+  migrationRetrySeconds: 25, // how long a client keeps trying each host candidate after the host drops
   roomCodeLength: 4,
   peerIdPrefix: 'cth-room-',
 
@@ -24,6 +25,7 @@ export const GAME = {
   destinationCount: 8,
   resetCooldownSec: 5,
   drownSeconds: 3,
+  awayKeepSeconds: 45, // a disconnected player's car waits this long for them to come back
   markerSeconds: 10,
   ropeMaxLength: 30,
   ropeMinLength: 2,

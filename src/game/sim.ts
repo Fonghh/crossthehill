@@ -1,4 +1,5 @@
-// Authoritative simulation. Runs only on the host (the player who opened the room).
+// Authoritative simulation. Runs only on the current host. If the host drops, the next
+// player rebuilds it from the last snapshot (HostSim.restore) and carries on.
 
 import { GAME } from '../config/game';
 import { VEHICLES, type VehicleId, type VehicleSpec } from '../config/vehicles';
@@ -16,6 +17,7 @@ interface PlayerState {
   lastReset: number;
   drownT: number;
   slot: number;
+  awaySince: number | null; // sim time the player disconnected; car is kept for a while
 }
 
 export class HostSim {
@@ -25,6 +27,8 @@ export class HostSim {
   ropes = new Map<string, Rope>(); // keyed by owner
   anchors: AnchorIndex;
   events: GameEvent[] = [];
+  /** Players dropped by the away timeout since the last check (main loop re-broadcasts the list). */
+  removed: string[] = [];
   delivered = 0;
   destIndex = 0;
   tripStart = performance.now();
@@ -34,7 +38,7 @@ export class HostSim {
   specs: Record<VehicleId, VehicleSpec> = structuredClone(VEHICLES);
   private safe: { x: number; y: number; z: number; yaw: number };
 
-  constructor(public terrain: TerrainData) {
+  constructor(public terrain: TerrainData, public hostId = 'host') {
     this.phys = new PhysicsWorld(terrain);
     this.anchors = new AnchorIndex(terrain);
     const s = terrain.spawn;
@@ -65,7 +69,7 @@ export class HostSim {
 
   /** Late joiners appear next to the host (behind and to the side), not back at the pad. */
   private joinPoint(slot: number) {
-    const host = this.cars.get('host');
+    const host = this.cars.get(this.hostId);
     if (!host || slot === 0) return this.spawnPoint(slot);
     const p = host.body.translation();
     const f = rotate(host.body.rotation(), { x: 0, y: 0, z: 1 });
@@ -84,7 +88,7 @@ export class HostSim {
     const sp = this.joinPoint(slot);
     const car = new VehiclePhysics(this.phys, this.specs[info.car], info.id, { x: sp.x, y: 0, z: sp.z }, sp.yaw);
     car.teleport({ x: sp.x, y: car.groundHeight(sp.x, sp.z) + 1.4, z: sp.z }, sp.yaw);
-    this.players.set(info.id, { info, car, winch: false, lastReset: -99, drownT: 0, slot });
+    this.players.set(info.id, { info, car, winch: false, lastReset: -99, drownT: 0, slot, awaySince: null });
     this.cars.set(info.id, car);
   }
 
@@ -104,8 +108,36 @@ export class HostSim {
     }
   }
 
+  /** Join order is preserved (Map insertion order); clients use it to pick the next host. */
   playerList(): PlayerInfo[] {
-    return [...this.players.values()].map((p) => p.info);
+    return [...this.players.values()].map((p) => ({ ...p.info, host: p.info.id === this.hostId || undefined, away: p.awaySince !== null || undefined }));
+  }
+
+  /** Disconnected: freeze their inputs and keep the car for GAME.awayKeepSeconds. */
+  setAway(id: string) {
+    const p = this.players.get(id);
+    if (!p || p.awaySince !== null) return;
+    p.awaySince = this.time;
+    p.car.input = { steer: 0, throttle: 0, brake: 0 };
+    p.winch = false;
+  }
+
+  isAway(id: string): boolean {
+    return this.players.get(id)?.awaySince != null;
+  }
+
+  /** A returning player takes their car back. */
+  setBack(id: string, name?: string) {
+    const p = this.players.get(id);
+    if (!p) return;
+    p.awaySince = null;
+    if (name) p.info = { ...p.info, name };
+  }
+
+  private activeCount(): number {
+    let n = 0;
+    for (const p of this.players.values()) if (p.awaySince === null) n++;
+    return n;
   }
 
   handle(id: string, msg: ClientMsg) {
@@ -212,6 +244,13 @@ export class HostSim {
       if (y < -30) this.respawn(p);
     }
     for (const [id, m] of this.markers) if (m.until < this.time) this.markers.delete(id);
+    for (const p of [...this.players.values()]) {
+      if (p.awaySince !== null && this.time - p.awaySince > GAME.awayKeepSeconds) {
+        this.removePlayer(p.info.id);
+        this.events.push({ kind: 'toast', text: `${p.info.name} 沒有回來，車子已移除` });
+        this.removed.push(p.info.id);
+      }
+    }
     this.checkDelivery();
   }
 
@@ -219,6 +258,7 @@ export class HostSim {
     const d = this.destination;
     const out: string[] = [];
     for (const [id, car] of this.cars) {
+      if (this.isAway(id)) continue; // disconnected players don't block a delivery
       const t = car.body.translation();
       if (Math.hypot(t.x - d.x, t.z - d.z) < GAME.destinationRadius) out.push(id);
     }
@@ -226,8 +266,9 @@ export class HostSim {
   }
 
   private checkDelivery() {
-    if (!this.players.size) return;
-    if (this.inZone().length !== this.players.size) return;
+    const active = this.activeCount();
+    if (!active) return;
+    if (this.inZone().length !== active) return;
     const d = this.destination;
     const seconds = (performance.now() - this.tripStart) / 1000;
     this.delivered++;
@@ -266,6 +307,7 @@ export class HostSim {
       cars,
       ropes: [...this.ropes.values()].map((r) => r.snap()),
       game: {
+        simTime: Math.round(this.time * 100) / 100,
         delivered: this.delivered,
         destIndex: this.destIndex,
         tripStart: this.tripStart,
@@ -273,6 +315,48 @@ export class HostSim {
         markers: [...this.markers.values()],
       },
     };
+  }
+
+  /**
+   * Host migration: rebuild the simulation from the last snapshot a client received.
+   * Every car keeps its pose and velocity, ropes and mission progress carry over, and
+   * every other player is marked away until they reconnect and reclaim their car.
+   */
+  static restore(terrain: TerrainData, hostId: string, snap: Snapshot, players: PlayerInfo[]): HostSim {
+    const sim = new HostSim(terrain, hostId);
+    sim.time = snap.game.simTime ?? 0;
+    sim.delivered = snap.game.delivered;
+    sim.destIndex = snap.game.destIndex;
+    sim.tripStart = performance.now() - Math.max(0, snap.t - snap.game.tripStart);
+    for (const m of snap.game.markers) sim.markers.set(m.id, { ...m });
+    const dests = terrain.destinations;
+    if (sim.destIndex > 0) {
+      const last = dests[(sim.destIndex - 1) % dests.length];
+      const next = sim.destination;
+      sim.safe = { x: last.x, y: last.y, z: last.z, yaw: Math.atan2(next.x - last.x, next.z - last.z) };
+    }
+    const byId = new Map(snap.cars.map((c) => [c.id, c]));
+    for (const info of players) {
+      const c = byId.get(info.id);
+      if (!c) continue;
+      const { host: _h, away: _a, ...clean } = info;
+      void _h; void _a;
+      const car = new VehiclePhysics(sim.phys, sim.specs[clean.car], clean.id, { x: c.p[0], y: c.p[1], z: c.p[2] }, 0);
+      car.body.setRotation({ x: c.q[0], y: c.q[1], z: c.q[2], w: c.q[3] }, true);
+      car.body.setLinvel({ x: c.v[0], y: c.v[1], z: c.v[2] }, true);
+      sim.players.set(clean.id, { info: clean, car, winch: false, lastReset: -99, drownT: 0, slot: sim.freeSlot(), awaySince: null });
+      sim.cars.set(clean.id, car);
+      // Everyone but us is "away" until they reconnect (the old host may come back too).
+      if (clean.id !== hostId) sim.setAway(clean.id);
+    }
+    for (const r of snap.ropes) {
+      if (!sim.cars.has(r.owner)) continue;
+      if (r.target.kind === 'car' && !sim.cars.has(r.target.id)) continue;
+      const rope = new Rope(r.owner, r.ownerLocal, r.target, r.length);
+      rope.length = r.length;
+      sim.ropes.set(r.owner, rope);
+    }
+    return sim;
   }
 
   /** Debug: drop a player's car at (x, z). */

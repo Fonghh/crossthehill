@@ -126,13 +126,17 @@ export class GameRenderer {
       const cur = this.cars.get(p.id);
       if (cur && cur.info.car === p.car) {
         if (cur.info.color !== p.color) cur.model.setColor(p.color);
-        if (cur.info.name !== p.name) { this.scene.remove(cur.tag); cur.tag = nameTag(p.name, p.color); this.scene.add(cur.tag); }
+        if (cur.info.name !== p.name || !!cur.info.away !== !!p.away) {
+          this.scene.remove(cur.tag);
+          cur.tag = nameTag(tagText(p), p.color);
+          this.scene.add(cur.tag);
+        }
         cur.info = p;
         continue;
       }
       if (cur) this.scene.remove(cur.model.root, cur.tag);
       const model = new CarModel(VEHICLES[p.car], p.color);
-      const tag = nameTag(p.name, p.color);
+      const tag = nameTag(tagText(p), p.color);
       this.scene.add(model.root, tag);
       this.cars.set(p.id, { model, info: p, tag });
     }
@@ -352,6 +356,8 @@ export class GameRenderer {
     this.renderer.render(this.scene, this.camera);
   }
 }
+
+const tagText = (p: PlayerInfo) => (p.away ? `${p.name}（斷線）` : p.name);
 
 function nameTag(name: string, color: string): THREE.Sprite {
   const c = document.createElement('canvas');

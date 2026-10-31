@@ -7,6 +7,8 @@ export interface PlayerInfo {
   name: string;
   car: VehicleId;
   color: string;
+  host?: boolean; // currently running the simulation
+  away?: boolean; // disconnected; car is kept for a while so they can come back
 }
 
 export interface CarSnap {
@@ -40,6 +42,7 @@ export interface RopeSnap {
 export interface Marker { id: string; x: number; z: number; until: number }
 
 export interface GameSnap {
+  simTime: number; // host sim clock (seconds); marker expiry is relative to it
   delivered: number;
   destIndex: number;
   tripStart: number;
@@ -64,7 +67,7 @@ export type GameEvent =
 export interface InputMsg { type: 'input'; steer: number; throttle: number; brake: number; winch: boolean }
 
 export type ClientMsg =
-  | { type: 'hello'; name: string; car: VehicleId; color: string }
+  | { type: 'hello'; name: string; car: VehicleId; color: string; prevId?: string }
   | InputMsg
   | { type: 'attach'; target: RopeTarget }
   | { type: 'detach' }
